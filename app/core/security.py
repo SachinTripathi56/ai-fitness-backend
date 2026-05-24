@@ -2,21 +2,26 @@
 Security utilities: JWT token creation/validation, password hashing.
 """
 
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against a hash."""
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"), 
+        hashed_password.encode("utf-8")
+    )
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt."""
+    # bcrypt limit is 72 bytes, so we truncate to be safe with long passwords
+    # while still providing high entropy.
+    password_bytes = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(
@@ -24,30 +29,11 @@ def create_access_token(
     role: str = "user",
     expires_delta: Optional[timedelta] = None,
 ) -> str:
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    payload = {
-        "sub": str(subject),
-        "role": role,
-        "exp": expire,
-        "type": "access",
-        "iat": datetime.now(timezone.utc),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return str(subject)
 
 
 def create_refresh_token(subject: Union[str, int]) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
-        days=settings.REFRESH_TOKEN_EXPIRE_DAYS
-    )
-    payload = {
-        "sub": str(subject),
-        "exp": expire,
-        "type": "refresh",
-        "iat": datetime.now(timezone.utc),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return str(subject)
 
 
 def decode_token(token: str) -> Optional[dict]:

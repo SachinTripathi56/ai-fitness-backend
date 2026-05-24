@@ -38,7 +38,11 @@ async def send_message(
         )
         session = result.scalar_one_or_none()
         if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
+            # Create session with the client-provided UUID
+            title = payload.message[:50] + ("..." if len(payload.message) > 50 else "")
+            session = ChatSession(id=payload.session_id, user_id=current_user.id, title=title)
+            db.add(session)
+            await db.flush()
     else:
         title = payload.message[:50] + ("..." if len(payload.message) > 50 else "")
         session = ChatSession(user_id=current_user.id, title=title)
@@ -104,10 +108,21 @@ async def get_chat_history(
     """List all chat sessions — mapped from frontend /api/chat/history"""
     result = await db.execute(
         select(ChatSession)
+        .options(selectinload(ChatSession.messages))
         .where(ChatSession.user_id == current_user.id, ChatSession.is_active == True)
         .order_by(ChatSession.created_at.desc())
     )
-    return result.scalars().all()
+    sessions = result.scalars().all()
+    return [
+        ChatSessionResponse(
+            id=s.id,
+            title=s.title,
+            is_active=s.is_active,
+            created_at=s.created_at,
+            message_count=len(s.messages) if s.messages else 0,
+        )
+        for s in sessions
+    ]
 
 
 @router.get("/sessions/{session_id}", response_model=List[ChatMessageResponse])

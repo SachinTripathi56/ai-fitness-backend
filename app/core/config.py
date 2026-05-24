@@ -98,7 +98,10 @@ class Settings(BaseSettings):
         return v
 
     class Config:
-        env_file = ".env"
+        import os
+        from pathlib import Path
+        _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        env_file = str(_env_path) if _env_path.exists() else ".env"
         case_sensitive = True
 
 

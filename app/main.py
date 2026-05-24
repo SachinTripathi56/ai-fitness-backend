@@ -76,10 +76,29 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ─── MIDDLEWARE ───
 
-origins = [
+class CleanDoubleSlashesMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if "//" in path:
+                import re
+                scope["path"] = re.sub(r"/+", "/", path)
+        await self.app(scope, receive, send)
+
+app.add_middleware(CleanDoubleSlashesMiddleware)
+
+
+origins = list(set(settings.ALLOWED_ORIGINS + [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
-]
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]))
 
 app.add_middleware(
     CORSMiddleware,

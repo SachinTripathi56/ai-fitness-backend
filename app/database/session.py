@@ -24,14 +24,7 @@ class Base(DeclarativeBase):
     metadata = metadata
 
 
-# Async engine
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    echo=settings.DEBUG,
-    future=True,
-)
+# Async engine (single instance with connection pooling and pre-ping)
 engine = create_async_engine(
     settings.DATABASE_URL,
     pool_size=settings.DB_POOL_SIZE,
@@ -42,6 +35,7 @@ engine = create_async_engine(
     connect_args={
         "timeout": 60,
         "statement_cache_size": 0,
+        "ssl": "require",
     }
 )
 
@@ -55,14 +49,17 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def get_db() -> AsyncSession:
-    """Dependency: yields an async database session."""
+    """
+    Dependency: yields an async database session.
+    Endpoints are responsible for calling db.commit() themselves.
+    On unhandled exceptions the session is rolled back automatically.
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
         except Exception as e:
             await session.rollback()
-            logger.error(f"Database session error: {e}")
+            logger.error(f"Database session rollback due to: {e}")
             raise
         finally:
             await session.close()

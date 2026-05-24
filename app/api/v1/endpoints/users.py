@@ -47,6 +47,11 @@ async def complete_onboarding(
     current_user.is_onboarded = True
     await db.commit()
     await db.refresh(profile)
+    
+    # Generate initial AI plans (workout, diet, schedule) in parallel
+    from app.services.plan_generation import generate_initial_plans_for_user
+    await generate_initial_plans_for_user(current_user.id, db)
+    
     await redis_service.invalidate_user_cache(str(current_user.id))
     return profile
 

@@ -152,69 +152,143 @@ async def get_today_workout(
     today = calendar.day_name[datetime.now().weekday()].lower()
     plan = await _get_active_plan(current_user.id, db)
     if not plan:
-        return {"session": None, "message": "No active plan. Generate one first."}
+        return {
+            "id": "none",
+            "date": "Today",
+            "title": "Rest Day",
+            "focus": "recovery",
+            "estimated_minutes": 0,
+            "calories_burn": 0,
+            "exercises": [],
+            "warmup": [],
+            "cooldown": [],
+            "completed": False
+        }
 
     session = next((s for s in plan.sessions if s.day_of_week.value == today), None)
-    if not session:
-        return {"session": None, "message": "Rest day today!"}
+    if not session or session.is_rest_day:
+        return {
+            "id": str(session.id) if session else "rest",
+            "date": "Today",
+            "title": "Rest Day" if not session else session.session_name,
+            "focus": "recovery" if not session else session.focus_area or "recovery",
+            "estimated_minutes": 0,
+            "calories_burn": 0,
+            "exercises": [],
+            "warmup": [],
+            "cooldown": [],
+            "completed": False
+        }
+
+    # Check if completed today
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    comp_result = await db.execute(
+        select(WorkoutCompletionLog)
+        .where(WorkoutCompletionLog.session_id == session.id, WorkoutCompletionLog.completed_at >= today_start)
+    )
+    completed = bool(comp_result.scalar_one_or_none())
+
+    # Map exercises
+    exercises = []
+    warmup = []
+    cooldown = []
+
+    for we in sorted(session.exercises, key=lambda x: x.order):
+        mapped_ex = {
+            "id": str(we.id),
+            "name": we.exercise.name,
+            "muscle_group": we.exercise.muscle_groups[0] if we.exercise.muscle_groups else "Full Body",
+            "equipment": we.exercise.equipment_needed[0] if we.exercise.equipment_needed else "Bodyweight",
+            "sets": we.sets,
+            "reps": we.reps or "10",
+            "rest_seconds": we.rest_seconds,
+            "difficulty": we.exercise.difficulty or "medium",
+            "instructions": we.exercise.instructions or "",
+        }
+        if we.is_warmup:
+            warmup.append(mapped_ex)
+        elif we.is_cooldown:
+            cooldown.append(mapped_ex)
+        else:
+            exercises.append(mapped_ex)
 
     return {
-        "session": {
-            "id": str(session.id),
-            "name": session.session_name,
-            "focus_area": session.focus_area,
-            "estimated_duration_minutes": session.estimated_duration_minutes,
-            "is_rest_day": session.is_rest_day,
-            "warmup_notes": session.warmup_notes,
-            "cooldown_notes": session.cooldown_notes,
-            "exercises": [
-                {
-                    "id": str(we.id),
-                    "name": we.exercise.name,
-                    "sets": we.sets,
-                    "reps": we.reps,
-                    "rest_seconds": we.rest_seconds,
-                    "muscle_groups": we.exercise.muscle_groups,
-                    "instructions": we.exercise.instructions,
-                    "is_warmup": we.is_warmup,
-                    "is_cooldown": we.is_cooldown,
-                }
-                for we in sorted((we for we in session.exercises), key=lambda x: x.order)
-            ],
-        }
+        "id": str(session.id),
+        "date": "Today",
+        "title": session.session_name,
+        "focus": session.focus_area or "strength",
+        "estimated_minutes": session.estimated_duration_minutes or 45,
+        "calories_burn": int(session.estimated_duration_minutes * 6) if session.estimated_duration_minutes else 250,
+        "exercises": exercises,
+        "warmup": warmup,
+        "cooldown": cooldown,
+        "completed": completed
     }
 
 
-@router.get("/week", response_model=dict)
+@router.get("/week", response_model=List[dict])
 async def get_week_workout(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the full weekly workout plan."""
+    """Return the full weekly workout plan as a list of sessions."""
     plan = await _get_active_plan(current_user.id, db)
     if not plan:
-        return {"plan": None, "message": "No active plan. Generate one first."}
+        return []
 
-    return {
-        "plan_id": str(plan.id),
-        "plan_name": plan.name,
-        "sessions": [
-            {
-                "id": str(s.id),
-                "day_of_week": s.day_of_week.value,
-                "session_name": s.session_name,
-                "focus_area": s.focus_area,
-                "estimated_duration_minutes": s.estimated_duration_minutes,
-                "is_rest_day": s.is_rest_day,
-                "exercise_count": len(s.exercises),
+    # Get completion logs for this week
+    week_start = datetime.now(timezone.utc) - timedelta(days=datetime.now(timezone.utc).weekday())
+    comp_result = await db.execute(
+        select(WorkoutCompletionLog.session_id)
+        .where(WorkoutCompletionLog.user_id == current_user.id, WorkoutCompletionLog.completed_at >= week_start)
+    )
+    completed_session_ids = {str(sid) for sid in comp_result.scalars().all()}
+
+    sessions_list = []
+    weekday_order = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    sorted_sessions = sorted(
+        plan.sessions,
+        key=lambda x: weekday_order.index(x.day_of_week.value) if x.day_of_week.value in weekday_order else 99
+    )
+
+    for s in sorted_sessions:
+        exercises = []
+        warmup = []
+        cooldown = []
+
+        for we in sorted(s.exercises, key=lambda x: x.order):
+            mapped_ex = {
+                "id": str(we.id),
+                "name": we.exercise.name,
+                "muscle_group": we.exercise.muscle_groups[0] if we.exercise.muscle_groups else "Full Body",
+                "equipment": we.exercise.equipment_needed[0] if we.exercise.equipment_needed else "Bodyweight",
+                "sets": we.sets,
+                "reps": we.reps or "10",
+                "rest_seconds": we.rest_seconds,
+                "difficulty": we.exercise.difficulty or "medium",
+                "instructions": we.exercise.instructions or "",
             }
-            for s in sorted(
-    (s for s in plan.sessions),
-    key=lambda x: ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].index(x.day_of_week.value)
-)
-            #for s in sorted(s for s in plan.sessions, key=lambda x: ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].index(x.day_of_week.value))
-        ],
-    }
+            if we.is_warmup:
+                warmup.append(mapped_ex)
+            elif we.is_cooldown:
+                cooldown.append(mapped_ex)
+            else:
+                exercises.append(mapped_ex)
+
+        sessions_list.append({
+            "id": str(s.id),
+            "date": s.day_of_week.value.capitalize(),
+            "title": s.session_name,
+            "focus": s.focus_area or "strength",
+            "estimated_minutes": s.estimated_duration_minutes or 45,
+            "calories_burn": int(s.estimated_duration_minutes * 6) if s.estimated_duration_minutes else 250,
+            "exercises": exercises,
+            "warmup": warmup,
+            "cooldown": cooldown,
+            "completed": str(s.id) in completed_session_ids
+        })
+
+    return sessions_list
 
 
 @router.post("/{session_id}/complete", response_model=BaseResponse)

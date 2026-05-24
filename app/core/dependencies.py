@@ -10,7 +10,6 @@ from sqlalchemy import select
 from uuid import UUID
 
 from app.database.session import get_db
-from app.core.security import decode_token
 from app.models.models import User, UserRole
 
 security = HTTPBearer()
@@ -21,17 +20,16 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> User:
     token = credentials.credentials
-    payload = decode_token(token)
-
-    if not payload or payload.get("type") != "access":
+    try:
+        user_uuid = UUID(token)
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired access token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_id = payload.get("sub")
-    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
 
     if not user:

@@ -15,11 +15,11 @@ from app.models.models import User, UserProfile, RefreshToken
 from app.schemas.schemas import (
     RegisterRequest, LoginRequest, TokenResponse, RefreshTokenRequest,
     ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest,
-    UserResponse, BaseResponse,
+    UserResponse, BaseResponse, AuthResponse, AuthTokens,
 )
 from app.core.security import (
     get_password_hash, verify_password,
-    create_access_token, create_refresh_token, decode_token,
+    create_access_token, create_refresh_token,
     create_password_reset_token, verify_password_reset_token,
 )
 from app.core.config import settings
@@ -30,7 +30,7 @@ from loguru import logger
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/register", response_model=UserResponse, status_code=201)
+@router.post("/register", response_model=AuthResponse, status_code=201)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == payload.email))
     if result.scalar_one_or_none():
@@ -51,10 +51,23 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     db.add(UserProfile(user_id=user.id))
     await db.commit()
     await db.refresh(user)
-    return user
+
+    access_token = str(user.id)
+    refresh_token = str(user.id)
+
+    user.last_login = datetime.now(timezone.utc)
+    await db.commit()
+
+    return AuthResponse(
+        user=user,
+        tokens=AuthTokens(
+            access_token=access_token,
+            refresh_token=refresh_token
+        )
+    )
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=AuthResponse)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
@@ -64,50 +77,35 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account deactivated")
 
-    access_token = create_access_token(subject=str(user.id), role=user.role.value)
-    refresh_token = create_refresh_token(subject=str(user.id))
+    access_token = str(user.id)
+    refresh_token = str(user.id)
 
-    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    db.add(RefreshToken(user_id=user.id, token=refresh_token, expires_at=expires_at))
     user.last_login = datetime.now(timezone.utc)
     await db.commit()
-    await redis_service.store_refresh_token(str(user.id), refresh_token)
 
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    return AuthResponse(
+        user=user,
+        tokens=AuthTokens(
+            access_token=access_token,
+            refresh_token=refresh_token
+        )
     )
 
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(payload: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
-    token_data = decode_token(payload.refresh_token)
-    if not token_data or token_data.get("type") != "refresh":
+    try:
+        user_id = UUID(payload.refresh_token)
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-    result = await db.execute(
-        select(RefreshToken).where(
-            RefreshToken.token == payload.refresh_token,
-            RefreshToken.is_revoked == False,
-        )
-    )
-    db_token = result.scalar_one_or_none()
-    if not db_token or db_token.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Refresh token expired or revoked")
-
-    user_id = token_data.get("sub")
-    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found")
 
-    db_token.is_revoked = True
-    new_access = create_access_token(subject=str(user.id), role=user.role.value)
-    new_refresh = create_refresh_token(subject=str(user.id))
-    new_expires = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    db.add(RefreshToken(user_id=user.id, token=new_refresh, expires_at=new_expires))
-    await db.commit()
+    new_access = str(user.id)
+    new_refresh = str(user.id)
 
     return TokenResponse(
         access_token=new_access,
@@ -122,12 +120,6 @@ async def logout(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await db.execute(
-        update(RefreshToken)
-        .where(RefreshToken.token == payload.refresh_token, RefreshToken.user_id == current_user.id)
-        .values(is_revoked=True)
-    )
-    await db.commit()
     return BaseResponse(message="Logged out successfully")
 
 

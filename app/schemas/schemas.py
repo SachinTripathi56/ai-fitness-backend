@@ -65,6 +65,46 @@ class TokenResponse(BaseModel):
     expires_in: int  # seconds
 
 
+class UserAuthResponse(BaseModel):
+    id: UUID
+    email: EmailStr
+    name: Optional[str] = None
+    role: UserRole
+    avatar_url: Optional[str] = None
+    onboarded: bool
+
+    model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = data.copy()
+            data["name"] = data.get("full_name") or data.get("username") or ""
+            data["onboarded"] = data.get("is_onboarded") or False
+        else:
+            # It's an ORM object
+            return {
+                "id": getattr(data, "id"),
+                "email": getattr(data, "email"),
+                "name": getattr(data, "full_name", None) or getattr(data, "username", ""),
+                "role": getattr(data, "role"),
+                "avatar_url": getattr(data, "avatar_url", None),
+                "onboarded": getattr(data, "is_onboarded", False)
+            }
+        return data
+
+
+class AuthTokens(BaseModel):
+    access_token: str
+    refresh_token: str
+
+
+class AuthResponse(BaseModel):
+    user: UserAuthResponse
+    tokens: AuthTokens
+
+
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
@@ -239,8 +279,8 @@ class WorkoutPlanResponse(BaseModel):
 
 
 class WorkoutLogRequest(BaseModel):
-    session_id: UUID
-    duration_minutes: int
+    session_id: Optional[UUID] = None  # Already in URL path, optional in body
+    duration_minutes: Optional[int] = None
     calories_burned: Optional[float] = None
     rating: Optional[int] = Field(default=None, ge=1, le=5)
     notes: Optional[str] = None
