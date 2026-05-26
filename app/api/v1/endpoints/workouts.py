@@ -152,6 +152,14 @@ async def get_today_workout(
     today = calendar.day_name[datetime.now().weekday()].lower()
     plan = await _get_active_plan(current_user.id, db)
     if not plan:
+        profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id == current_user.id))
+        profile = profile_result.scalar_one_or_none()
+        if profile:
+            from app.services.plan_generation import generate_initial_plans_for_user
+            await generate_initial_plans_for_user(current_user.id, db)
+            plan = await _get_active_plan(current_user.id, db)
+            
+    if not plan:
         return {
             "id": "none",
             "date": "Today",

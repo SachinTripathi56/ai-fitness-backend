@@ -103,6 +103,14 @@ async def get_today_schedule(
     today = calendar.day_name[datetime.now().weekday()].lower()
     schedule = await _get_active_schedule(current_user.id, db)
     if not schedule:
+        profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id == current_user.id))
+        profile = profile_result.scalar_one_or_none()
+        if profile:
+            from app.services.plan_generation import generate_initial_plans_for_user
+            await generate_initial_plans_for_user(current_user.id, db)
+            schedule = await _get_active_schedule(current_user.id, db)
+            
+    if not schedule:
         return []
 
     events = [e for e in schedule.events if e.day_of_week.value == today]
@@ -128,6 +136,14 @@ async def get_week_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     schedule = await _get_active_schedule(current_user.id, db)
+    if not schedule:
+        profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id == current_user.id))
+        profile = profile_result.scalar_one_or_none()
+        if profile:
+            from app.services.plan_generation import generate_initial_plans_for_user
+            await generate_initial_plans_for_user(current_user.id, db)
+            schedule = await _get_active_schedule(current_user.id, db)
+            
     if not schedule:
         return {"schedule": None, "message": "No active schedule. Generate one first."}
 

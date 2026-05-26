@@ -29,6 +29,18 @@ async def get_overview(
     profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id == current_user.id))
     profile = profile_result.scalar_one_or_none()
 
+    # Proactively generate plans if profile exists but no active workout plan is found
+    if profile:
+        plan_check = await db.execute(
+            select(WorkoutPlan).where(WorkoutPlan.user_id == current_user.id, WorkoutPlan.is_active == True)
+        )
+        if not plan_check.scalar_one_or_none():
+            from app.services.plan_generation import generate_initial_plans_for_user
+            await generate_initial_plans_for_user(current_user.id, db)
+            # Re-fetch profile in case generate_initial_plans_for_user made changes or to be clean
+            profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id == current_user.id))
+            profile = profile_result.scalar_one_or_none()
+
     # Latest progress log
     log_result = await db.execute(
         select(ProgressLog)
